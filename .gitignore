@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# ngrok
+ngrok.log
+ngrok.pid
+
+# 上传产物（图片和设备信息）
+images/
+*.jpg
+*.jpeg
+*.txt
+!templates/**/*.html
+!requirements.txt
+!traffic-policy.yml
+!ngrok.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log

